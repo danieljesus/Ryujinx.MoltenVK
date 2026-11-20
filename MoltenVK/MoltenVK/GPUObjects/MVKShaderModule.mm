@@ -565,6 +565,14 @@ id<MTLLibrary> MVKShaderLibraryCompiler::newMTLLibrary(NSString* mslSourceCode,
 			@autoreleasepool {
 				auto mtlCompileOptions = getDevice()->getMTLCompileOptions(shaderConversionResults.entryPoint.fpFastMathFlags,
 																		   shaderConversionResults.isPositionInvariant);
+				// A module converted to a higher MSL version than the device's (cooperative matrices).
+				if (shaderConversionResults.mslVersion >= SPIRV_CROSS_NAMESPACE::CompilerMSL::Options::make_msl_version(3, 1)) {
+					if (@available(macOS 14.0, iOS 17.0, tvOS 17.0, *)) {
+						if (mtlCompileOptions.languageVersion < MTLLanguageVersion3_1) {
+							mtlCompileOptions.languageVersion = MTLLanguageVersion3_1;
+						}
+					}
+				}
 				if (!specializationMacroDef.empty()) {
 					size_t macro_count = specializationMacroDef.size();
 					NSString *macro_names[macro_count];

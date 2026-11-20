@@ -2017,6 +2017,9 @@ void MVKGraphicsPipeline::initShaderConversionConfig(SPIRVToMSLConversionConfigu
 	auto& mtlFeats = getMetalFeatures();
 	auto& mvkCfg = getMVKConfig();
     shaderConfig.options.mslOptions.msl_version = mtlFeats.mslVersion;
+	shaderConfig.options.cooperativeMatrixMSLVersion = (mtlFeats.cooperativeMatrix
+														 ? SPIRV_CROSS_NAMESPACE::CompilerMSL::Options::make_msl_version(3, 1)
+														 : 0);
     shaderConfig.options.mslOptions.texel_buffer_texture_width = mtlFeats.maxTextureDimension;
     shaderConfig.options.mslOptions.r32ui_linear_texture_alignment = (uint32_t)_device->getVkFormatTexelBufferAlignment(VK_FORMAT_R32_UINT, this);
 	shaderConfig.options.mslOptions.texture_buffer_native = true;
@@ -2459,6 +2462,9 @@ MVKMTLFunction MVKComputePipeline::getMTLFunction(const VkComputePipelineCreateI
 	shaderConfig.options.entryPointName = pCreateInfo->stage.pName;
 	shaderConfig.options.entryPointStage = spv::ExecutionModelGLCompute;
     shaderConfig.options.mslOptions.msl_version = mtlFeats.mslVersion;
+	shaderConfig.options.cooperativeMatrixMSLVersion = (mtlFeats.cooperativeMatrix
+														 ? SPIRV_CROSS_NAMESPACE::CompilerMSL::Options::make_msl_version(3, 1)
+														 : 0);
     shaderConfig.options.mslOptions.texel_buffer_texture_width = mtlFeats.maxTextureDimension;
     shaderConfig.options.mslOptions.r32ui_linear_texture_alignment = (uint32_t)_device->getVkFormatTexelBufferAlignment(VK_FORMAT_R32_UINT, this);
 	shaderConfig.options.mslOptions.texture_buffer_native = true;
@@ -2948,7 +2954,8 @@ namespace mvk {
 				opt.tessPatchKind,
 				opt.numTessControlPoints,
 				opt.shouldFlipVertexY,
-				opt.shouldFixupClipSpace);
+				opt.shouldFixupClipSpace,
+				opt.cooperativeMatrixMSLVersion);
 	}
 
 	template<class Archive>
@@ -2997,7 +3004,8 @@ namespace mvk {
 				scr.needsInputThreadgroupMem,
 				scr.needsDispatchBaseBuffer,
 				scr.needsViewRangeBuffer,
-				scr.usesPhysicalStorageBufferAddressesCapability);
+				scr.usesPhysicalStorageBufferAddressesCapability,
+				scr.mslVersion);
 	}
 
 	template<class Archive>
@@ -3149,12 +3157,12 @@ void mvkValidateCeralArchiveDefinitions() {
 	missingBytes += mvkValidateCerealArchiveSize<SPIRV_CROSS_NAMESPACE::MSLConstexprSampler>();
 	missingBytes += mvkValidateCerealArchiveSize<mvk::SPIRVWorkgroupSizeDimension>(3);
 	missingBytes += mvkValidateCerealArchiveSize<mvk::SPIRVEntryPoint>(20);						// Contains string
-	missingBytes += mvkValidateCerealArchiveSize<mvk::SPIRVToMSLConversionOptions>(23);			// Contains string
+	missingBytes += mvkValidateCerealArchiveSize<mvk::SPIRVToMSLConversionOptions>(27);			// Contains string
 	missingBytes += mvkValidateCerealArchiveSize<mvk::MSLShaderInterfaceVariable>(3);
 	missingBytes += mvkValidateCerealArchiveSize<mvk::MSLResourceBinding>(2);
 	missingBytes += mvkValidateCerealArchiveSize<mvk::DescriptorBinding>();
-	missingBytes += mvkValidateCerealArchiveSize<mvk::SPIRVToMSLConversionConfiguration>(103);	// Contains collection
-	missingBytes += mvkValidateCerealArchiveSize<mvk::SPIRVToMSLConversionResultInfo>(42);		// Contains collection
+	missingBytes += mvkValidateCerealArchiveSize<mvk::SPIRVToMSLConversionConfiguration>(107);	// Contains collection
+	missingBytes += mvkValidateCerealArchiveSize<mvk::SPIRVToMSLConversionResultInfo>(38);		// Contains collection
 	missingBytes += mvkValidateCerealArchiveSize<mvk::MSLSpecializationMacroInfo>(22);			// Contains string
 	missingBytes += mvkValidateCerealArchiveSize<MVKShaderModuleKey>();
 	missingBytes += mvkValidateCerealArchiveSize<MVKCompressor<std::string>>(20);				// Contains collection

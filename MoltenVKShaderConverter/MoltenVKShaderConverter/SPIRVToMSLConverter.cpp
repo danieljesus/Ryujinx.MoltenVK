@@ -54,6 +54,7 @@ MVK_PUBLIC_SYMBOL bool SPIRVToMSLConversionOptions::matches(const SPIRVToMSLConv
 	if (numTessControlPoints != other.numTessControlPoints) { return false; }
 	if (shouldFlipVertexY != other.shouldFlipVertexY) { return false; }
 	if (shouldFixupClipSpace != other.shouldFixupClipSpace) { return false; }
+	if (cooperativeMatrixMSLVersion != other.cooperativeMatrixMSLVersion) { return false; }
 	return true;
 }
 
@@ -295,7 +296,18 @@ MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverter::convert(SPIRVToMSLConversionConfigur
 
 		// Establish the MSL options for the compiler
 		// This needs to be done in two steps...for CompilerMSL and its superclass.
-		pMSLCompiler->set_msl_options(shaderConfig.options.mslOptions);
+		// A module that uses cooperative matrices may need a higher MSL version than the others.
+		auto mslOpts = shaderConfig.options.mslOptions;
+		if (shaderConfig.options.cooperativeMatrixMSLVersion > mslOpts.msl_version) {
+			for (auto cap : pMSLCompiler->get_declared_capabilities()) {
+				if (cap == CapabilityCooperativeMatrixKHR) {
+					mslOpts.msl_version = shaderConfig.options.cooperativeMatrixMSLVersion;
+					break;
+				}
+			}
+		}
+		pMSLCompiler->set_msl_options(mslOpts);
+		conversionResult.resultInfo.mslVersion = mslOpts.msl_version;
 
 		auto scOpts = pMSLCompiler->get_common_options();
 		scOpts.vertex.flip_vert_y = shaderConfig.options.shouldFlipVertexY;

@@ -43,6 +43,12 @@ namespace mvk {
 		spv::ExecutionModel entryPointStage = spv::ExecutionModelMax;
 		spv::ExecutionMode tessPatchKind = spv::ExecutionModeMax;
 		uint32_t numTessControlPoints = 0;
+		/**
+		 * The MSL version to convert a module that declares the CooperativeMatrixKHR capability with,
+		 * when higher than mslOptions.msl_version, or zero if cooperative matrices are not supported.
+		 * This allows a device to keep a lower MSL version for its other shaders.
+		 */
+		uint32_t cooperativeMatrixMSLVersion = 0;
 		bool shouldFlipVertexY = true;
 		bool shouldFixupClipSpace = false;
 
@@ -260,6 +266,7 @@ namespace mvk {
 		bool needsDispatchBaseBuffer = false;
 		bool needsViewRangeBuffer = false;
 		bool usesPhysicalStorageBufferAddressesCapability = false;
+		uint32_t mslVersion = 0;	/**< The MSL version the module was converted to. */
 		std::map<uint32_t, MSLSpecializationMacroInfo> specializationMacros;
 
 	} SPIRVToMSLConversionResultInfo;
