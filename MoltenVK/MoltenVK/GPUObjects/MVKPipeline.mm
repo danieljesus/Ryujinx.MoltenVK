@@ -2590,7 +2590,15 @@ class MVKShaderCacheIterator : public MVKBaseObject {
 protected:
 	friend MVKPipelineCache;
 
-	bool next() { return (++_index < (_pSLCache ? _pSLCache->_shaderLibraries.size() : 0)); }
+	// Skips shader libraries whose MSL did not compile. Every later load of the cache would fail to
+	// compile them again, and readData() would then fail the whole pipeline cache.
+	bool next() {
+		size_t slCount = _pSLCache ? _pSLCache->_shaderLibraries.size() : 0;
+		while (++_index < slCount) {
+			if (_pSLCache->_shaderLibraries[_index].second->_mtlLibrary) { return true; }
+		}
+		return false;
+	}
 	SPIRVToMSLConversionConfiguration& getShaderConversionConfig() { return _pSLCache->_shaderLibraries[_index].first; }
 	MVKCompressor<std::string>& getCompressedMSL() { return _pSLCache->_shaderLibraries[_index].second->getCompressedMSL(); }
 	SPIRVToMSLConversionResultInfo& getShaderConversionResultInfo() { return _pSLCache->_shaderLibraries[_index].second->_shaderConversionResultInfo; }
