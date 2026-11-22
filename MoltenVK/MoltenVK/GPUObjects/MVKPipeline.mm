@@ -2739,6 +2739,11 @@ void MVKPipelineCache::readData(const VkPipelineCacheCreateInfo* pCreateInfo) {
 		reader(pcUUID);			// Pipeline cache UUID
 		if ( !mvkAreEqual(pcUUID, dvcProps.pipelineCacheUUID, VK_UUID_SIZE) ) { return; }
 
+		// A shader library that does not compile is dropped from the cache, rather than failing the
+		// whole pipeline cache with its compile error. Data written before such libraries were
+		// left out of serialization can still hold one.
+		const VkResult resultBeforeLibraries = getConfigurationResult();
+		uint32_t droppedLibraryCount = 0;
 		bool done = false;
 		while ( !done ) {
 			reader(cacheEntryType);
@@ -2761,7 +2766,12 @@ void MVKPipelineCache::readData(const VkPipelineCacheCreateInfo* pCreateInfo) {
 					// Add the shader library to the staging cache.
 					MVKShaderLibraryCache* slCache = getShaderLibraryCache(smKey);
 					addPerformanceInterval(getPerformanceStats().pipelineCache.readPipelineCache, startTime);
-					slCache->addShaderLibrary(&shaderConversionConfig, resultInfo, compressedMSL);
+					MVKShaderLibrary* shLib = slCache->addShaderLibrary(&shaderConversionConfig, resultInfo, compressedMSL);
+					if ( !shLib->isCompiled() ) {
+						slCache->_shaderLibraries.pop_back();
+						shLib->destroy();
+						droppedLibraryCount++;
+					}
 
 					break;
 				}
@@ -2771,6 +2781,12 @@ void MVKPipelineCache::readData(const VkPipelineCacheCreateInfo* pCreateInfo) {
 					break;
 				}
 			}
+		}
+		if (droppedLibraryCount) {
+			// Only the compile errors of the dropped libraries were reported since the read began.
+			if (resultBeforeLibraries == VK_SUCCESS) { clearConfigurationResult(); }
+			MVKLogWarn("Dropped %u shader libraries from pipeline cache data because their MSL did not compile.", droppedLibraryCount);
+			markDirty();
 		}
 
 	} catch (cereal::Exception& ex) {

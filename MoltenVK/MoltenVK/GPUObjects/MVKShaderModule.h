@@ -91,6 +91,9 @@ class MVKShaderLibrary : public MVKBaseDeviceObject {
 
 public:
 
+	/** Returns whether the MSL of this library compiled into a Metal library. */
+	bool isCompiled() const { return _mtlLibrary != nil; }
+
 	/** Returns the Vulkan API opaque object controlling this object. */
 	MVKVulkanAPIObject* getVulkanAPIObject() override { return _owner->getVulkanAPIObject(); };
 
