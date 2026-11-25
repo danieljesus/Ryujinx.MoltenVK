@@ -1,0 +1,378 @@
+From 8553cd0ed8ceadf51f5b04e4e0eef3bced7f7dd4 Mon Sep 17 00:00:00 2001
+From: Timo Suoranta <tksuoran@gmail.com>
+Date: Wed, 21 Oct 2026 16:18:23 +0300
+Subject: [PATCH 1/2] MSL: Inline precise arithmetic helpers on MSL 3.2
+
+NoContraction (precise) add, sub and mul are emitted as calls to helpers
+declared [[clang::optnone]], so the Metal compiler cannot inline them and
+every precise operation becomes a real function call. In a fragment shader
+with precise operations inside a loop (a shadow lookup per light) this costs
+several times the whole shader: on an Apple M4 Pro the forward pass of a
+43-light scene took 26.6 ms with the optnone helpers and 6.0 ms with them
+inlined, with bit-identical output.
+
+From MSL 3.2 the helpers are regular functions whose bodies start with
+#pragma metal fp math_mode(safe) and #pragma metal fp contract(off). The
+scoped pragmas keep every operation in the helper exact without preventing
+inlining. Earlier MSL versions keep the optnone helpers.
+
+(cherry picked from KhronosGroup/SPIRV-Cross commit
+98cbb7c02be35364ecacc23dc0c038d2360b0ed0 onto e52532a6, the revision
+MoltenVK pins. The conflicts were in context lines only: the pinned helper
+bodies (fma(T(1), l, r) and the others) differ from upstream's, and are kept.)
+---
+ .../vert/no-contraction.msl32.vert            | 101 +++++++++++++++++
+ .../vert/no-contraction.msl32.vert            | 105 ++++++++++++++++++
+ shaders-msl/vert/no-contraction.msl32.vert    |  15 +++
+ spirv_msl.cpp                                 |  40 +++++--
+ spirv_msl.hpp                                 |   1 +
+ 5 files changed, 250 insertions(+), 12 deletions(-)
+ create mode 100644 reference/opt/shaders-msl/vert/no-contraction.msl32.vert
+ create mode 100644 reference/shaders-msl/vert/no-contraction.msl32.vert
+ create mode 100644 shaders-msl/vert/no-contraction.msl32.vert
+
+diff --git a/reference/opt/shaders-msl/vert/no-contraction.msl32.vert b/reference/opt/shaders-msl/vert/no-contraction.msl32.vert
+new file mode 100644
+index 00000000..8fec231d
+--- /dev/null
++++ b/reference/opt/shaders-msl/vert/no-contraction.msl32.vert
+@@ -0,0 +1,101 @@
++#pragma clang diagnostic ignored "-Wmissing-prototypes"
++
++#include <metal_stdlib>
++#include <simd/simd.h>
++
++using namespace metal;
++
++template<typename T>
++T spvFMul(T l, T r)
++{
++    #pragma metal fp math_mode(safe)
++    #pragma metal fp contract(off)
++    return fma(l, r, T(-0.0));
++}
++
++template<typename T, int Cols, int Rows>
++vec<T, Cols> spvFMulVectorMatrix(vec<T, Rows> v, matrix<T, Cols, Rows> m)
++{
++    #pragma metal fp math_mode(safe)
++    #pragma metal fp contract(off)
++    vec<T, Cols> res = vec<T, Cols>(T(-0.0));
++    for (uint i = Rows; i > 0; --i)
++    {
++        vec<T, Cols> tmp(0);
++        for (uint j = 0; j < Cols; ++j)
++        {
++            tmp[j] = m[j][i - 1];
++        }
++        res = fma(tmp, vec<T, Cols>(v[i - 1]), res);
++    }
++    return res;
++}
++
++template<typename T, int Cols, int Rows>
++vec<T, Rows> spvFMulMatrixVector(matrix<T, Cols, Rows> m, vec<T, Cols> v)
++{
++    #pragma metal fp math_mode(safe)
++    #pragma metal fp contract(off)
++    vec<T, Rows> res = vec<T, Rows>(T(-0.0));
++    for (uint i = Cols; i > 0; --i)
++    {
++        res = fma(m[i - 1], vec<T, Rows>(v[i - 1]), res);
++    }
++    return res;
++}
++
++template<typename T, int LCols, int LRows, int RCols, int RRows>
++matrix<T, RCols, LRows> spvFMulMatrixMatrix(matrix<T, LCols, LRows> l, matrix<T, RCols, RRows> r)
++{
++    #pragma metal fp math_mode(safe)
++    #pragma metal fp contract(off)
++    static_assert(LCols == RRows, "column-row configuration mismatch");
++    matrix<T, RCols, LRows> res;
++    for (uint i = 0; i < RCols; i++)
++    {
++        vec<T, LRows> tmp(T(-0.0));
++        for (uint j = 0; j < LCols; j++)
++        {
++            tmp = fma(vec<T, LRows>(r[i][j]), l[j], tmp);
++        }
++        res[i] = tmp;
++    }
++    return res;
++}
++
++template<typename T>
++T spvFAdd(T l, T r)
++{
++    #pragma metal fp math_mode(safe)
++    #pragma metal fp contract(off)
++    return fma(T(1), l, r);
++}
++
++template<typename T>
++T spvFSub(T l, T r)
++{
++    #pragma metal fp math_mode(safe)
++    #pragma metal fp contract(off)
++    return fma(T(-1), r, l);
++}
++
++struct main0_out
++{
++    float4 gl_Position [[position]];
++};
++
++struct main0_in
++{
++    float4 vA [[attribute(0)]];
++    float4 vB [[attribute(1)]];
++    float4 vC [[attribute(2)]];
++};
++
++vertex main0_out main0(main0_in in [[stage_in]])
++{
++    main0_out out = {};
++    float4 _15 = spvFMul(in.vA, in.vB);
++    out.gl_Position = spvFAdd(spvFAdd(spvFAdd(_15, spvFAdd(in.vA, in.vB)), spvFSub(in.vA, in.vB)), spvFAdd(_15, in.vC));
++    return out;
++}
++
+diff --git a/reference/shaders-msl/vert/no-contraction.msl32.vert b/reference/shaders-msl/vert/no-contraction.msl32.vert
+new file mode 100644
+index 00000000..75da397b
+--- /dev/null
++++ b/reference/shaders-msl/vert/no-contraction.msl32.vert
+@@ -0,0 +1,105 @@
++#pragma clang diagnostic ignored "-Wmissing-prototypes"
++
++#include <metal_stdlib>
++#include <simd/simd.h>
++
++using namespace metal;
++
++template<typename T>
++T spvFMul(T l, T r)
++{
++    #pragma metal fp math_mode(safe)
++    #pragma metal fp contract(off)
++    return fma(l, r, T(-0.0));
++}
++
++template<typename T, int Cols, int Rows>
++vec<T, Cols> spvFMulVectorMatrix(vec<T, Rows> v, matrix<T, Cols, Rows> m)
++{
++    #pragma metal fp math_mode(safe)
++    #pragma metal fp contract(off)
++    vec<T, Cols> res = vec<T, Cols>(T(-0.0));
++    for (uint i = Rows; i > 0; --i)
++    {
++        vec<T, Cols> tmp(0);
++        for (uint j = 0; j < Cols; ++j)
++        {
++            tmp[j] = m[j][i - 1];
++        }
++        res = fma(tmp, vec<T, Cols>(v[i - 1]), res);
++    }
++    return res;
++}
++
++template<typename T, int Cols, int Rows>
++vec<T, Rows> spvFMulMatrixVector(matrix<T, Cols, Rows> m, vec<T, Cols> v)
++{
++    #pragma metal fp math_mode(safe)
++    #pragma metal fp contract(off)
++    vec<T, Rows> res = vec<T, Rows>(T(-0.0));
++    for (uint i = Cols; i > 0; --i)
++    {
++        res = fma(m[i - 1], vec<T, Rows>(v[i - 1]), res);
++    }
++    return res;
++}
++
++template<typename T, int LCols, int LRows, int RCols, int RRows>
++matrix<T, RCols, LRows> spvFMulMatrixMatrix(matrix<T, LCols, LRows> l, matrix<T, RCols, RRows> r)
++{
++    #pragma metal fp math_mode(safe)
++    #pragma metal fp contract(off)
++    static_assert(LCols == RRows, "column-row configuration mismatch");
++    matrix<T, RCols, LRows> res;
++    for (uint i = 0; i < RCols; i++)
++    {
++        vec<T, LRows> tmp(T(-0.0));
++        for (uint j = 0; j < LCols; j++)
++        {
++            tmp = fma(vec<T, LRows>(r[i][j]), l[j], tmp);
++        }
++        res[i] = tmp;
++    }
++    return res;
++}
++
++template<typename T>
++T spvFAdd(T l, T r)
++{
++    #pragma metal fp math_mode(safe)
++    #pragma metal fp contract(off)
++    return fma(T(1), l, r);
++}
++
++template<typename T>
++T spvFSub(T l, T r)
++{
++    #pragma metal fp math_mode(safe)
++    #pragma metal fp contract(off)
++    return fma(T(-1), r, l);
++}
++
++struct main0_out
++{
++    float4 gl_Position [[position]];
++};
++
++struct main0_in
++{
++    float4 vA [[attribute(0)]];
++    float4 vB [[attribute(1)]];
++    float4 vC [[attribute(2)]];
++};
++
++vertex main0_out main0(main0_in in [[stage_in]])
++{
++    main0_out out = {};
++    float4 mul = spvFMul(in.vA, in.vB);
++    float4 add = spvFAdd(in.vA, in.vB);
++    float4 sub = spvFSub(in.vA, in.vB);
++    float4 mad = spvFAdd(spvFMul(in.vA, in.vB), in.vC);
++    float4 summed = spvFAdd(spvFAdd(spvFAdd(mul, add), sub), mad);
++    out.gl_Position = summed;
++    return out;
++}
++
+diff --git a/shaders-msl/vert/no-contraction.msl32.vert b/shaders-msl/vert/no-contraction.msl32.vert
+new file mode 100644
+index 00000000..206fbf0d
+--- /dev/null
++++ b/shaders-msl/vert/no-contraction.msl32.vert
+@@ -0,0 +1,15 @@
++#version 450
++
++layout(location = 0) in vec4 vA;
++layout(location = 1) in vec4 vB;
++layout(location = 2) in vec4 vC;
++
++void main()
++{
++	precise vec4 mul = vA * vB;
++	precise vec4 add = vA + vB;
++	precise vec4 sub = vA - vB;
++	precise vec4 mad = vA * vB + vC;
++	precise vec4 summed = mul + add + sub + mad;
++	gl_Position = summed;
++}
+diff --git a/spirv_msl.cpp b/spirv_msl.cpp
+index 6cf6b11b..fa61c18c 100644
+--- a/spirv_msl.cpp
++++ b/spirv_msl.cpp
+@@ -6014,6 +6014,28 @@ void CompilerMSL::emit_custom_templates()
+ 	}
+ }
+ 
++// Begins a helper function implementing NoContraction (precise) arithmetic.
++// From MSL 3.2 the body is compiled with safe math and without contraction
++// through the scoped fp pragmas, so every operation stays exactly as written
++// while the helper can still be inlined. Earlier MSL versions have no such
++// pragmas; there the helper is optnone, which keeps it exact but turns every
++// use into a real function call.
++void CompilerMSL::emit_precise_helper_begin(const char *signature)
++{
++	if (msl_options.supports_msl_version(3, 2))
++	{
++		statement(signature);
++		begin_scope();
++		statement("#pragma metal fp math_mode(safe)");
++		statement("#pragma metal fp contract(off)");
++	}
++	else
++	{
++		statement("[[clang::optnone]] ", signature);
++		begin_scope();
++	}
++}
++
+ // Emits any needed custom function bodies.
+ // Metal helper functions must be static force-inline, i.e. static inline __attribute__((always_inline))
+ // otherwise they will cause problems when linked together in a single Metallib.
+@@ -6364,8 +6386,7 @@ void CompilerMSL::emit_custom_functions()
+ 		// "fadd" intrinsic support
+ 		case SPVFuncImplFAdd:
+ 			statement("template<typename T>");
+-			statement("[[clang::optnone]] T spvFAdd(T l, T r)");
+-			begin_scope();
++			emit_precise_helper_begin("T spvFAdd(T l, T r)");
+ 			statement("return fma(T(1), l, r);");
+ 			end_scope();
+ 			statement("");
+@@ -6374,8 +6395,7 @@ void CompilerMSL::emit_custom_functions()
+ 		// "fsub" intrinsic support
+ 		case SPVFuncImplFSub:
+ 			statement("template<typename T>");
+-			statement("[[clang::optnone]] T spvFSub(T l, T r)");
+-			begin_scope();
++			emit_precise_helper_begin("T spvFSub(T l, T r)");
+ 			statement("return fma(T(-1), r, l);");
+ 			end_scope();
+ 			statement("");
+@@ -6384,15 +6404,13 @@ void CompilerMSL::emit_custom_functions()
+ 		// "fmul' intrinsic support
+ 		case SPVFuncImplFMul:
+ 			statement("template<typename T>");
+-			statement("[[clang::optnone]] T spvFMul(T l, T r)");
+-			begin_scope();
++			emit_precise_helper_begin("T spvFMul(T l, T r)");
+ 			statement("return fma(l, r, T(0));");
+ 			end_scope();
+ 			statement("");
+ 
+ 			statement("template<typename T, int Cols, int Rows>");
+-			statement("[[clang::optnone]] vec<T, Cols> spvFMulVectorMatrix(vec<T, Rows> v, matrix<T, Cols, Rows> m)");
+-			begin_scope();
++			emit_precise_helper_begin("vec<T, Cols> spvFMulVectorMatrix(vec<T, Rows> v, matrix<T, Cols, Rows> m)");
+ 			statement("vec<T, Cols> res = vec<T, Cols>(0);");
+ 			statement("for (uint i = Rows; i > 0; --i)");
+ 			begin_scope();
+@@ -6408,8 +6426,7 @@ void CompilerMSL::emit_custom_functions()
+ 			statement("");
+ 
+ 			statement("template<typename T, int Cols, int Rows>");
+-			statement("[[clang::optnone]] vec<T, Rows> spvFMulMatrixVector(matrix<T, Cols, Rows> m, vec<T, Cols> v)");
+-			begin_scope();
++			emit_precise_helper_begin("vec<T, Rows> spvFMulMatrixVector(matrix<T, Cols, Rows> m, vec<T, Cols> v)");
+ 			statement("vec<T, Rows> res = vec<T, Rows>(0);");
+ 			statement("for (uint i = Cols; i > 0; --i)");
+ 			begin_scope();
+@@ -6420,8 +6437,7 @@ void CompilerMSL::emit_custom_functions()
+ 			statement("");
+ 
+ 			statement("template<typename T, int LCols, int LRows, int RCols, int RRows>");
+-			statement("[[clang::optnone]] matrix<T, RCols, LRows> spvFMulMatrixMatrix(matrix<T, LCols, LRows> l, matrix<T, RCols, RRows> r)");
+-			begin_scope();
++			emit_precise_helper_begin("matrix<T, RCols, LRows> spvFMulMatrixMatrix(matrix<T, LCols, LRows> l, matrix<T, RCols, RRows> r)");
+ 			statement("matrix<T, RCols, LRows> res;");
+ 			statement("for (uint i = 0; i < RCols; i++)");
+ 			begin_scope();
+diff --git a/spirv_msl.hpp b/spirv_msl.hpp
+index 1a28e058..6b0e8512 100644
+--- a/spirv_msl.hpp
++++ b/spirv_msl.hpp
+@@ -1053,6 +1053,7 @@ protected:
+ 
+ 	void emit_custom_templates();
+ 	void emit_custom_functions();
++	void emit_precise_helper_begin(const char *signature);
+ 	void emit_resources();
+ 	void emit_specialization_constants_and_structs();
+ 	void emit_interface_block(uint32_t ib_var_id);
+-- 
+2.54.0 (Apple Git-157)
+

@@ -335,11 +335,29 @@ REPO_NAME=SPIRV-Cross
 if [ ! "$SPIRV_CROSS_ROOT" = "" ]; then
 	rm -rf ${REPO_NAME}
 	ln -sfn ${SPIRV_CROSS_ROOT} ${REPO_NAME}
+	echo "Using ${SPIRV_CROSS_ROOT} as is: ${EXT_REV_DIR}/${REPO_NAME}_patches are not applied to it."
 else
 	REPO_URL="https://github.com/KhronosGroup/${REPO_NAME}.git"
 	REPO_REV=$(cat "${EXT_REV_DIR}/${REPO_NAME}_repo_revision")
 
 	update_repo ${REPO_NAME} ${REPO_URL} ${REPO_REV}
+
+	# Changes carried on top of the pinned revision, applied in name order to a clean checkout of
+	# it. The forced checkout restores the tracked files but leaves behind the files an earlier
+	# run's patches added, so those untracked copies are removed before a patch is applied again.
+	# A patch that does not apply stops the script.
+	git -C ${REPO_NAME} checkout --quiet --force ${REPO_REV}
+	for PATCH in "${EXT_REV_DIR}/${REPO_NAME}_patches/"*.patch; do
+		[ -f "${PATCH}" ] || continue
+		PATCH_PATH="$(cd "$(dirname "${PATCH}")" && pwd)/$(basename "${PATCH}")"
+		for ADDED in $(git -C ${REPO_NAME} apply --summary "${PATCH_PATH}" | awk '$1 == "create" { print $4 }'); do
+			if ! git -C ${REPO_NAME} ls-files --error-unmatch -- "${ADDED}" > /dev/null 2>&1; then
+				rm -f "${REPO_NAME}/${ADDED}"
+			fi
+		done
+		git -C ${REPO_NAME} apply --whitespace=nowarn "${PATCH_PATH}"
+		echo "${REPO_NAME}: applied $(basename "${PATCH}")"
+	done
 fi
 
 
