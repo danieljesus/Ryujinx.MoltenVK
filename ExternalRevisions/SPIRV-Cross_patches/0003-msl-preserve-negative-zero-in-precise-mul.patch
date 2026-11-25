@@ -1,0 +1,60 @@
+From 5c98fac24e68a6d2e2a92cb032c4b7b2de6b5a70 Mon Sep 17 00:00:00 2001
+From: Zheorgyan <zheorgyan@gmail.com>
+Date: Thu, 8 Oct 2026 16:00:19 +0200
+Subject: [PATCH] MSL: Preserve negative zero in precise multiplication
+
+spvFMul computed l * r as fma(l, r, T(0)). When the product is -0,
+adding +0 gives +0, so the sign was lost. Use -0.0 as the addend
+instead, which leaves every product unchanged. The matrix helpers
+start their fma accumulators at -0.0 for the same reason.
+
+(backported from KhronosGroup/SPIRV-Cross commit
+300681bbcb8365a8d1eacdacdbdd0249bbf1d6b1 onto e52532a6 with patches 0001
+and 0002: the same four value changes, in the helper declarations
+98cbb7c0 introduced; the pinned spvFMulMatrixMatrix keeps its RCols
+vector type. Upstream's reference outputs are not included.)
+---
+ spirv_msl.cpp | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/spirv_msl.cpp b/spirv_msl.cpp
+index 6215f559..7a6a5193 100644
+--- a/spirv_msl.cpp
++++ b/spirv_msl.cpp
+@@ -6406,13 +6406,13 @@ void CompilerMSL::emit_custom_functions()
+ 		case SPVFuncImplFMul:
+ 			statement("template<typename T>");
+ 			emit_precise_helper_begin("T spvFMul(T l, T r)");
+-			statement("return fma(l, r, T(0));");
++			statement("return fma(l, r, T(-0.0));");
+ 			end_scope();
+ 			statement("");
+ 
+ 			statement("template<typename T, int Cols, int Rows>");
+ 			emit_precise_helper_begin("vec<T, Cols> spvFMulVectorMatrix(vec<T, Rows> v, matrix<T, Cols, Rows> m)");
+-			statement("vec<T, Cols> res = vec<T, Cols>(0);");
++			statement("vec<T, Cols> res = vec<T, Cols>(T(-0.0));");
+ 			statement("for (uint i = Rows; i > 0; --i)");
+ 			begin_scope();
+ 			statement("vec<T, Cols> tmp(0);");
+@@ -6428,7 +6428,7 @@ void CompilerMSL::emit_custom_functions()
+ 
+ 			statement("template<typename T, int Cols, int Rows>");
+ 			emit_precise_helper_begin("vec<T, Rows> spvFMulMatrixVector(matrix<T, Cols, Rows> m, vec<T, Cols> v)");
+-			statement("vec<T, Rows> res = vec<T, Rows>(0);");
++			statement("vec<T, Rows> res = vec<T, Rows>(T(-0.0));");
+ 			statement("for (uint i = Cols; i > 0; --i)");
+ 			begin_scope();
+ 			statement("res = fma(m[i - 1], vec<T, Rows>(v[i - 1]), res);");
+@@ -6442,7 +6442,7 @@ void CompilerMSL::emit_custom_functions()
+ 			statement("matrix<T, RCols, LRows> res;");
+ 			statement("for (uint i = 0; i < RCols; i++)");
+ 			begin_scope();
+-			statement("vec<T, RCols> tmp(0);");
++			statement("vec<T, RCols> tmp(T(-0.0));");
+ 			statement("for (uint j = 0; j < LCols; j++)");
+ 			begin_scope();
+ 			statement("tmp = fma(vec<T, RCols>(r[i][j]), l[j], tmp);");
+-- 
+2.54.0 (Apple Git-157)
+
